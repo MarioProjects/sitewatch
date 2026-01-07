@@ -1,37 +1,76 @@
-import os
-import requests
+"""
+SiteWatch: A simple script to monitor webpages for changes and send email notifications.
+
+This script fetches the content of specified URLs, extracts visible text,
+compares it with previously saved versions, and sends an email via Resend
+if a change is detected.
+"""
+
 import hashlib
-from bs4 import BeautifulSoup
+import os
 from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
+import resend
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from loguru import logger
-import resend
 
 # Load environment variables
 load_dotenv()
 
 # Configuration from environment variables
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
-MONITOR_URLS = [url.strip() for url in os.environ.get("MONITOR_URLS", "").split(",") if url.strip()]
-EMAIL_RECIPIENTS = [email.strip() for email in os.environ.get("EMAIL_RECIPIENTS", "").split(",") if email.strip()]
+MONITOR_URLS = [
+    url.strip() for url in os.environ.get("MONITOR_URLS", "").split(",") if url.strip()
+]
+EMAIL_RECIPIENTS = [
+    email.strip()
+    for email in os.environ.get("EMAIL_RECIPIENTS", "").split(",")
+    if email.strip()
+]
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "Notification <onboarding@resend.dev>")
 EMAIL_SUBJECT = os.environ.get("EMAIL_SUBJECT", "Page Updated")
-EMAIL_HTML_TEMPLATE = os.environ.get("EMAIL_HTML", "The page has been updated! <br> <a href='{url}'>View page</a>")
+EMAIL_HTML_TEMPLATE = os.environ.get(
+    "EMAIL_HTML", "The page has been updated! <br> <a href='{url}'>View page</a>"
+)
 
 # Directory to store webpage versions
-SAVE_DIR = "webpage_versions"
+SAVE_DIR = Path("webpage_versions")
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
+
 def get_url_hash(url):
-    """Returns a short hash for a given URL to use in file paths."""
+    """
+    Returns a short hash for a given URL to use in file paths.
+
+    Args:
+        url (str): The URL to hash.
+
+    Returns:
+        str: A 10-character MD5 hash of the URL.
+    """
     return hashlib.md5(url.encode()).hexdigest()[:10]
 
+
 def get_page_content(url):
-    """Fetches the HTML content of a URL."""
+    """
+    Fetches the HTML content of a URL.
+
+    Args:
+        url (str): The URL to fetch.
+
+    Returns:
+        str | None: The HTML content if successful, None otherwise.
+    """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        )
     }
     try:
         response = requests.get(url, headers=headers, timeout=30)
@@ -41,9 +80,16 @@ def get_page_content(url):
         logger.error(f"Error fetching {url}: {e}")
         return None
 
+
 def extract_visible_text(html):
     """
     Parses HTML and returns only the visible text content (no scripts/styles).
+
+    Args:
+        html (str): The HTML content to parse.
+
+    Returns:
+        str | None: Cleaned visible text content, or None if input is empty.
     """
     if not html:
         return None
@@ -60,63 +106,93 @@ def extract_visible_text(html):
 
     return clean_text
 
+
 def save_content(url, content):
-    """Saves content to a file with a hash of the URL and a timestamp."""
+    """
+    Saves content to a file with a hash of the URL and a timestamp.
+
+    Args:
+        url (str): The URL associated with the content.
+        content (str): The text content to save.
+
+    Returns:
+        str: The path to the saved file.
+    """
     url_hash = get_url_hash(url)
-    url_dir = os.path.join(SAVE_DIR, url_hash)
-    os.makedirs(url_dir, exist_ok=True)
-    
+    url_dir = SAVE_DIR / url_hash
+    url_dir.mkdir(parents=True, exist_ok=True)
+
     utc_now = datetime.now(timezone.utc)
     timestamp = int(utc_now.timestamp() * 1_000)
-    file_path = os.path.join(url_dir, f"{timestamp}.md")
-    
-    with open(file_path, "w", encoding="utf-8") as f:
+    file_path = url_dir / f"{timestamp}.md"
+
+    with file_path.open("w", encoding="utf-8") as f:
         f.write(content)
-    return file_path
+    return str(file_path)
+
 
 def load_last_saved_file(url):
-    """Gets the last saved file for a specific URL."""
+    """
+    Gets the last saved file for a specific URL.
+
+    Args:
+        url (str): The URL to load content for.
+
+    Returns:
+        str | None: The content of the last saved file, or None if no file exists.
+    """
     url_hash = get_url_hash(url)
-    url_dir = os.path.join(SAVE_DIR, url_hash)
-    
-    if not os.path.exists(url_dir):
+    url_dir = SAVE_DIR / url_hash
+
+    if not url_dir.exists():
         return None
-        
-    files = os.listdir(url_dir)
+
+    files = sorted([f for f in url_dir.iterdir() if f.is_file()], reverse=True)
     if not files:
         return None
-    
-    files.sort(reverse=True)
-    last_file_path = os.path.join(url_dir, files[0])
-    
+
+    last_file_path = files[0]
+
     try:
-        with open(last_file_path, "r", encoding="utf-8") as f:
+        with last_file_path.open("r", encoding="utf-8") as f:
             return f.read()
     except Exception as e:
         logger.error(f"Error loading last file for {url}: {e}")
         return None
 
+
 def cleanup_old_files(url, minimum_files=10):
-    """Removes old files for a specific URL, keeping only the latest N files."""
+    """
+    Removes old files for a specific URL, keeping only the latest N files.
+
+    Args:
+        url (str): The URL to clean up files for.
+        minimum_files (int): The number of latest files to keep. Defaults to 10.
+    """
     url_hash = get_url_hash(url)
-    url_dir = os.path.join(SAVE_DIR, url_hash)
-    
-    if not os.path.exists(url_dir):
+    url_dir = SAVE_DIR / url_hash
+
+    if not url_dir.exists():
         return
-        
-    files = [f for f in os.listdir(url_dir) if f.endswith('.md')]
+
+    files = sorted([f for f in url_dir.iterdir() if f.suffix == ".md"])
     if len(files) <= minimum_files:
         return
-    
-    files.sort()
-    for file in files[:-minimum_files]:
+
+    for file_path in files[:-minimum_files]:
         try:
-            os.remove(os.path.join(url_dir, file))
+            file_path.unlink()
         except Exception as e:
-            logger.error(f"Error deleting old file {file}: {e}")
+            logger.error(f"Error deleting old file {file_path.name}: {e}")
+
 
 def notify_change(url):
-    """Sends an email notification using Resend."""
+    """
+    Sends an email notification using Resend when a change is detected.
+
+    Args:
+        url (str): The URL that has changed.
+    """
     if not RESEND_API_KEY:
         logger.warning("RESEND_API_KEY not set. Skipping notification.")
         return
@@ -138,12 +214,19 @@ def notify_change(url):
     except Exception as e:
         logger.error(f"Failed to send notification for {url}: {e}")
 
+
 def monitor_site(url):
-    """Monitors a single URL for changes."""
+    """
+    Monitors a single URL for changes.
+    Fetches content, compares with last version, and notifies on change.
+
+    Args:
+        url (str): The URL to monitor.
+    """
     logger.info(f"Checking {url}...")
-    
+
     previous_content = load_last_saved_file(url)
-    
+
     html = get_page_content(url)
     if html is None:
         return
@@ -167,18 +250,24 @@ def monitor_site(url):
 
     cleanup_old_files(url, 10)
 
+
 def main():
+    """
+    Entry point for the script.
+    Reads MONITOR_URLS from environment and starts monitoring.
+    """
     if not MONITOR_URLS:
         logger.error("No URLs to monitor. Please set MONITOR_URLS environment variable.")
         return
 
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
     for url in MONITOR_URLS:
         try:
             monitor_site(url)
         except Exception as e:
             logger.error(f"Unexpected error monitoring {url}: {e}")
+
 
 if __name__ == "__main__":
     main()

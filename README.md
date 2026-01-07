@@ -9,6 +9,7 @@ A simple Python script to monitor web pages for changes and send email notificat
 - [Features](#features)
 - [Configuration](#configuration)
 - [Local Development](#local-development)
+- [Pre-commit Hooks](#pre-commit-hooks)
 - [Docker Deployment](#docker-deployment)
 - [Monitoring Frequency (Cron)](#monitoring-frequency-cron)
 
@@ -47,6 +48,32 @@ uv sync
 4. Run the script:
 ```bash
 uv run script.py
+```
+
+## Pre-commit Hooks
+
+This project uses [pre-commit](https://pre-commit.com/) to maintain code quality. The hooks include:
+- **Ruff**: For linting and formatting.
+- **Gitleaks**: To prevent secrets from being committed.
+- **Standard hooks**: To check YAML, TOML, JSON files, trailing whitespace, etc.
+
+### Setup
+
+1. Install dependencies (including `pre-commit`):
+```bash
+uv sync
+```
+
+2. Install the git hooks:
+```bash
+uv run pre-commit install
+```
+
+### Usage
+
+The hooks will run automatically on every `git commit`. To run them manually on all files:
+```bash
+uv run pre-commit run --all-files
 ```
 
 ## Docker Deployment

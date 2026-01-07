@@ -1,0 +1,22 @@
+line-length = 90
+target-version = "py313"
+extend-exclude = [
+    ".github",
+    "tests"
+]
+
+[lint]
+extend-select = [
+  "I",
+  "B",
+  "G",
+  "T20",
+  "PTH",
+  "RUF"
+]
+
+[lint.isort]
+case-sensitive = true
+
+[lint.pydocstyle]
+convention = "google"
