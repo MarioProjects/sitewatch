@@ -1,0 +1,2 @@
+# Run script every minute and log output
+*/1 * * * * cd /app && /bin/uv run script.py >> /var/log/cron.log 2>&1
