@@ -87,6 +87,17 @@ jobs:
           encode_secret EMAIL_SUBJECT
           encode_secret EMAIL_HTML
 
+      - name: Set deployment image
+        id: deployment-image
+        shell: bash
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          image_name="$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')"
+          printf 'IMAGE_REF=%s/%s:%s\n' "$REGISTRY" "$image_name" "$REF_NAME" >> "$GITHUB_OUTPUT"
+
       - name: Deploy on server via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -96,7 +107,7 @@ jobs:
           EMAIL_RECIPIENTS_B64: ${{ steps.runtime-secrets.outputs.EMAIL_RECIPIENTS_B64 }}
           EMAIL_SUBJECT_B64: ${{ steps.runtime-secrets.outputs.EMAIL_SUBJECT_B64 }}
           GITHUB_ACTOR: ${{ github.actor }}
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          IMAGE_REF: ${{ steps.deployment-image.outputs.IMAGE_REF }}
           MONITOR_URLS_B64: ${{ steps.runtime-secrets.outputs.MONITOR_URLS_B64 }}
           RESEND_API_KEY_B64: ${{ steps.runtime-secrets.outputs.RESEND_API_KEY_B64 }}
         with:
