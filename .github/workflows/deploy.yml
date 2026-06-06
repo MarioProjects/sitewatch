@@ -1,0 +1,148 @@
+name: Deploy SiteWatch
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  CONTAINER_NAME: sitewatch
+  SERVER_APP_DIR: /opt/sitewatch
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Check Python code
+        run: |
+          uv sync --frozen
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.DEPLOY_PAT }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Encode runtime secrets
+        id: runtime-secrets
+        shell: bash
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MONITOR_URLS: ${{ secrets.MONITOR_URLS }}
+          EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_SUBJECT: ${{ secrets.EMAIL_SUBJECT }}
+          EMAIL_HTML: ${{ secrets.EMAIL_HTML }}
+        run: |
+          encode_secret() {
+            local name="$1"
+            printf '%s_B64=%s\n' "$name" "$(printf '%s' "${!name}" | base64 -w 0)" >> "$GITHUB_OUTPUT"
+          }
+
+          encode_secret RESEND_API_KEY
+          encode_secret MONITOR_URLS
+          encode_secret EMAIL_RECIPIENTS
+          encode_secret EMAIL_FROM
+          encode_secret EMAIL_SUBJECT
+          encode_secret EMAIL_HTML
+
+      - name: Deploy on server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DEPLOY_PAT: ${{ secrets.DEPLOY_PAT }}
+          EMAIL_FROM_B64: ${{ steps.runtime-secrets.outputs.EMAIL_FROM_B64 }}
+          EMAIL_HTML_B64: ${{ steps.runtime-secrets.outputs.EMAIL_HTML_B64 }}
+          EMAIL_RECIPIENTS_B64: ${{ steps.runtime-secrets.outputs.EMAIL_RECIPIENTS_B64 }}
+          EMAIL_SUBJECT_B64: ${{ steps.runtime-secrets.outputs.EMAIL_SUBJECT_B64 }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          MONITOR_URLS_B64: ${{ steps.runtime-secrets.outputs.MONITOR_URLS_B64 }}
+          RESEND_API_KEY_B64: ${{ steps.runtime-secrets.outputs.RESEND_API_KEY_B64 }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: CONTAINER_NAME,DEPLOY_PAT,EMAIL_FROM_B64,EMAIL_HTML_B64,EMAIL_RECIPIENTS_B64,EMAIL_SUBJECT_B64,GITHUB_ACTOR,IMAGE_REF,MONITOR_URLS_B64,REGISTRY,RESEND_API_KEY_B64,SERVER_APP_DIR
+          script: |
+            set -euo pipefail
+
+            echo "$DEPLOY_PAT" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+            APP_DIR="${SERVER_APP_DIR:-/opt/sitewatch}"
+            mkdir -p "$APP_DIR/webpage_versions"
+            ENV_FILE="$APP_DIR/sitewatch.env"
+
+            write_env() {
+              local name="$1"
+              local encoded="$2"
+              printf '%s=' "$name" >> "$ENV_FILE"
+              printf '%s' "$encoded" | base64 -d >> "$ENV_FILE"
+              printf '\n' >> "$ENV_FILE"
+            }
+
+            : > "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
+            write_env RESEND_API_KEY "$RESEND_API_KEY_B64"
+            write_env MONITOR_URLS "$MONITOR_URLS_B64"
+            write_env EMAIL_RECIPIENTS "$EMAIL_RECIPIENTS_B64"
+            write_env EMAIL_FROM "$EMAIL_FROM_B64"
+            write_env EMAIL_SUBJECT "$EMAIL_SUBJECT_B64"
+            write_env EMAIL_HTML "$EMAIL_HTML_B64"
+
+            echo "Deploying image: $IMAGE_REF as container: $CONTAINER_NAME"
+            docker pull "$IMAGE_REF"
+
+            docker stop "$CONTAINER_NAME" || true
+            docker rm "$CONTAINER_NAME" || true
+
+            docker run -d \
+              --name "$CONTAINER_NAME" \
+              --restart unless-stopped \
+              --env-file "$ENV_FILE" \
+              -v "$APP_DIR/webpage_versions:/app/webpage_versions" \
+              "$IMAGE_REF"
+
+            docker image prune -f
+
+            docker logout "$REGISTRY"
