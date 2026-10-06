@@ -19,6 +19,7 @@ A simple Python script to monitor web pages for changes and send email notificat
 - Extract visible text (ignoring scripts/styles) to avoid false positives.
 - Keep history of changes in Markdown files.
 - Email notifications using [Resend](https://resend.com/).
+- Email alert when a page keeps failing to load, and again when it is back.
 - Dockerized for easy deployment.
 
 ## Configuration
@@ -33,6 +34,21 @@ The script is configured via environment variables. You can create a `.env` file
 | `EMAIL_FROM` | Sender address (must be verified in Resend). | `Notification <onboarding@resend.dev>` |
 | `EMAIL_SUBJECT` | Subject of the notification email. | `Page Updated` |
 | `EMAIL_HTML` | HTML body of the email. Use `{url}` as a placeholder. | See `script.py` |
+| `FAILURE_ALERT_THRESHOLD` | Consecutive failed fetches of a URL before an alert email is sent. `0` disables it. | `15` |
+
+### Fetch failure alerts
+
+A page that cannot be loaded cannot be checked for changes. After `FAILURE_ALERT_THRESHOLD` failed fetches in a row (15 minutes with the default schedule) SiteWatch emails the recipients once, and emails again when the page loads. If the alert itself cannot be sent, for example because the server is offline, it is retried on every run.
+
+### Extra root certificates
+
+Some sites use a certificate authority that is not in the default trust store, which fails with `CERTIFICATE_VERIFY_FAILED`. Put the root certificate in `certs/` as a `.pem` file and rebuild the image: every certificate there is added to the system trust store, which `requests` is pointed at through `REQUESTS_CA_BUNDLE`.
+
+| File | Certificate authority | Needed for |
+|------|-----------------------|------------|
+| `fnmt-servidores-seguros-g2r.pem` | AC RAIZ FNMT-RCM SERVIDORES SEGUROS G2R | Spanish government sites such as `mapa.gob.es` |
+
+This only applies to the Docker image. When running the script directly, set `REQUESTS_CA_BUNDLE` yourself to a bundle that includes the certificate.
 
 ## Local Development
 

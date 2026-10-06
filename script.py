@@ -3,10 +3,13 @@ SiteWatch: A simple script to monitor webpages for changes and send email notifi
 
 This script fetches the content of specified URLs, extracts visible text,
 compares it with previously saved versions, and sends an email via Resend
-if a change is detected.
+if a change is detected. It also emails when a URL keeps failing to load, and
+again when it recovers.
 """
 
 import hashlib
+import html
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +38,8 @@ EMAIL_SUBJECT = os.environ.get("EMAIL_SUBJECT", "Page Updated")
 EMAIL_HTML_TEMPLATE = os.environ.get(
     "EMAIL_HTML", "The page has been updated! <br> <a href='{url}'>View page</a>"
 )
+# Consecutive failed fetches of a URL before an alert email is sent (0 disables)
+FAILURE_ALERT_THRESHOLD = int(os.environ.get("FAILURE_ALERT_THRESHOLD") or 15)
 
 # Directory to store webpage versions
 SAVE_DIR = Path("webpage_versions")
@@ -64,7 +69,10 @@ def get_page_content(url):
         url (str): The URL to fetch.
 
     Returns:
-        str | None: The HTML content if successful, None otherwise.
+        str: The HTML content.
+
+    Raises:
+        requests.RequestException: If the page could not be fetched.
     """
     headers = {
         "User-Agent": (
@@ -72,13 +80,9 @@ def get_page_content(url):
             "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         )
     }
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.text
-    except requests.RequestException as e:
-        logger.error(f"Error fetching {url}: {e}")
-        return None
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
+    return response.text
 
 
 def extract_visible_text(html):
@@ -186,6 +190,41 @@ def cleanup_old_files(url, minimum_files=10):
             logger.error(f"Error deleting old file {file_path.name}: {e}")
 
 
+def send_email(url, subject, html_content):
+    """
+    Sends an email about a URL to the configured recipients using Resend.
+
+    Args:
+        url (str): The URL the email is about.
+        subject (str): The subject of the email.
+        html_content (str): The HTML body of the email.
+
+    Returns:
+        bool: True if the email was sent, False otherwise.
+    """
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not set. Skipping notification.")
+        return False
+
+    if not EMAIL_RECIPIENTS:
+        logger.warning("EMAIL_RECIPIENTS not set. Skipping notification.")
+        return False
+
+    try:
+        params: resend.Emails.SendParams = {
+            "from": EMAIL_FROM,
+            "to": EMAIL_RECIPIENTS,
+            "subject": subject,
+            "html": html_content,
+        }
+        resend.Emails.send(params)
+        logger.info(f"Notification sent for {url}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send notification for {url}: {e}")
+        return False
+
+
 def notify_change(url):
     """
     Sends an email notification using Resend when a change is detected.
@@ -193,26 +232,103 @@ def notify_change(url):
     Args:
         url (str): The URL that has changed.
     """
-    if not RESEND_API_KEY:
-        logger.warning("RESEND_API_KEY not set. Skipping notification.")
-        return
+    send_email(url, EMAIL_SUBJECT, EMAIL_HTML_TEMPLATE.format(url=url))
 
-    if not EMAIL_RECIPIENTS:
-        logger.warning("EMAIL_RECIPIENTS not set. Skipping notification.")
-        return
+
+def get_failure_state_path(url):
+    """
+    Returns the path of the file that tracks failed fetches of a URL.
+
+    It lives next to the URL's directory, not inside it, so it is never
+    mistaken for a saved version of the page.
+
+    Args:
+        url (str): The URL to get the path for.
+
+    Returns:
+        Path: The path of the failure state file.
+    """
+    return SAVE_DIR / f"{get_url_hash(url)}.failures.json"
+
+
+def load_failure_state(url):
+    """
+    Loads the failure state of a URL.
+
+    Args:
+        url (str): The URL to load the state for.
+
+    Returns:
+        dict | None: The failure state, or None if the last fetch succeeded.
+    """
+    state_path = get_failure_state_path(url)
+    if not state_path.exists():
+        return None
 
     try:
-        html_content = EMAIL_HTML_TEMPLATE.format(url=url)
-        params: resend.Emails.SendParams = {
-            "from": EMAIL_FROM,
-            "to": EMAIL_RECIPIENTS,
-            "subject": EMAIL_SUBJECT,
-            "html": html_content,
-        }
-        resend.Emails.send(params)
-        logger.info(f"Notification sent for {url}")
+        return json.loads(state_path.read_text(encoding="utf-8"))
     except Exception as e:
-        logger.error(f"Failed to send notification for {url}: {e}")
+        logger.error(f"Error loading failure state for {url}: {e}")
+        return None
+
+
+def record_failure(url, error):
+    """
+    Records a failed fetch and emails once the failures reach the threshold.
+
+    The alert is retried on every later failure until it is sent, since the
+    cause of the failure may also prevent sending the email.
+
+    Args:
+        url (str): The URL that could not be fetched.
+        error (Exception): The error raised while fetching it.
+    """
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    state = load_failure_state(url) or {"count": 0, "first_failure": now}
+    state["count"] += 1
+    state["last_error"] = str(error)
+
+    if (
+        FAILURE_ALERT_THRESHOLD > 0
+        and state["count"] >= FAILURE_ALERT_THRESHOLD
+        and not state.get("alerted")
+    ):
+        logger.warning(f"{url} has failed {state['count']} times in a row.")
+        state["alerted"] = send_email(
+            url,
+            f"SiteWatch cannot load a page: {url}",
+            f"SiteWatch has failed to load <a href='{url}'>{url}</a> "
+            f"{state['count']} times in a row since {state['first_failure']}, "
+            "so changes to it are not being detected.<br><br>"
+            f"Last error: {html.escape(state['last_error'])}",
+        )
+
+    get_failure_state_path(url).write_text(json.dumps(state), encoding="utf-8")
+
+
+def clear_failure(url):
+    """
+    Clears the failure state of a URL after a successful fetch.
+
+    Emails that the URL is back if it had failed enough times to alert.
+
+    Args:
+        url (str): The URL that was fetched successfully.
+    """
+    state = load_failure_state(url)
+    state_path = get_failure_state_path(url)
+    if state_path.exists():
+        state_path.unlink()
+
+    if state and 0 < FAILURE_ALERT_THRESHOLD <= state.get("count", 0):
+        logger.info(f"{url} is reachable again after {state['count']} failures.")
+        send_email(
+            url,
+            f"SiteWatch can load a page again: {url}",
+            f"SiteWatch can load <a href='{url}'>{url}</a> again. It had failed "
+            f"{state['count']} times in a row since {state['first_failure']}, so "
+            "changes made in that period were only compared once it was back.",
+        )
 
 
 def monitor_site(url):
@@ -227,11 +343,15 @@ def monitor_site(url):
 
     previous_content = load_last_saved_file(url)
 
-    html = get_page_content(url)
-    if html is None:
+    try:
+        page_html = get_page_content(url)
+    except requests.RequestException as e:
+        logger.error(f"Error fetching {url}: {e}")
+        record_failure(url, e)
         return
+    clear_failure(url)
 
-    current_content = extract_visible_text(html)
+    current_content = extract_visible_text(page_html)
     if current_content is None:
         return
 
