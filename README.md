@@ -113,23 +113,23 @@ The script uses `cron` inside the Docker container to handle periodic monitoring
 ### How it works:
 - **`crontab` file**: Defines the schedule using standard cron syntax.
 - **`entrypoint.sh`**: When the container starts, it registers the `crontab` file and starts the cron service in the background.
-- **Execution**: The script is executed via `uv run` to ensure all dependencies are available.
+- **Execution**: The script is executed via `uv run --no-sync`, which uses the virtual environment built into the image as is, so no dependencies are downloaded when the container runs.
 
 ### Modifying the schedule:
 To change how often the script runs, edit the `crontab` file in the root of the project:
 
 ```bash
 # Example: Run every minute (current default)
-*/1 * * * * cd /app && /bin/uv run script.py >> /var/log/cron.log 2>&1
+*/1 * * * * cd /app && /bin/uv run --no-sync script.py >> /var/log/cron.log 2>&1
 
 # Example: Run every 15 minutes
-*/15 * * * * cd /app && /bin/uv run script.py >> /var/log/cron.log 2>&1
+*/15 * * * * cd /app && /bin/uv run --no-sync script.py >> /var/log/cron.log 2>&1
 
 # Example: Run every hour at the top of the hour
-0 * * * * cd /app && /bin/uv run script.py >> /var/log/cron.log 2>&1
+0 * * * * cd /app && /bin/uv run --no-sync script.py >> /var/log/cron.log 2>&1
 
 # Example: Run every day at midnight
-0 0 * * * cd /app && /bin/uv run script.py >> /var/log/cron.log 2>&1
+0 0 * * * cd /app && /bin/uv run --no-sync script.py >> /var/log/cron.log 2>&1
 ```
 
 After modifying the `crontab` file, you need to rebuild the Docker image:
