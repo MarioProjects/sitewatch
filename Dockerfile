@@ -26,8 +26,15 @@ RUN chmod +x entrypoint.sh
 
 # Install cron
 RUN apt-get update && \
-    apt-get install -y cron && \
+    apt-get install -y cron ca-certificates && \
     apt-get clean
+
+# Trust the extra root CAs in certs/ on top of the system ones
+RUN for cert in certs/*.pem; do \
+        cp "$cert" "/usr/local/share/ca-certificates/$(basename "$cert" .pem).crt"; \
+    done && \
+    update-ca-certificates
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 # Add crontab file
 RUN crontab crontab
