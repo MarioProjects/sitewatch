@@ -1,1 +1,31 @@
+# Runtime data, mounted as a volume on the server
 webpage_versions
+
+# Virtual environment of the host: the image builds its own in /app/.venv,
+# and copying this one over it breaks the interpreter path
+.venv
+
+# Secrets, passed at runtime with --env-file
+.env
+
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Caches and editor/OS files
+__pycache__/
+*.pyc
+.ruff_cache
+.ipynb_checkpoints/
+.vscode
+.DS_Store
+
+# Dev-only tooling and docs
+.pre-commit-config.yaml
+ruff.toml
+template.env
+README.md
+watcher.webp
+Dockerfile
+.dockerignore
