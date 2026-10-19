@@ -1,7 +1,10 @@
 #!/bin/bash
 
-# Export environment variables so they are available to cron
-printenv | grep -v "no_proxy" >> /etc/environment
+# Save the environment for the cron job, which starts with an empty one.
+# declare -px quotes every value, unlike /etc/environment, where "#" starts
+# a comment and cuts values such as CONTENT_SELECTOR=#content.
+declare -px | grep -v "no_proxy" > /run/sitewatch.env
+chmod 600 /run/sitewatch.env
 
 # Start the cron service
 service cron start

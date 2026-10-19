@@ -1,2 +1,4 @@
+SHELL=/bin/bash
+
 # Run script every minute and log output
-*/1 * * * * cd /app && /bin/uv run --no-sync script.py >> /var/log/cron.log 2>&1
+*/1 * * * * . /run/sitewatch.env && cd /app && /bin/uv run --no-sync script.py >> /var/log/cron.log 2>&1
