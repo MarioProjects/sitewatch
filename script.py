@@ -40,6 +40,8 @@ EMAIL_HTML_TEMPLATE = os.environ.get(
 )
 # Consecutive failed fetches of a URL before an alert email is sent (0 disables)
 FAILURE_ALERT_THRESHOLD = int(os.environ.get("FAILURE_ALERT_THRESHOLD") or 15)
+# CSS selector of the part of the page to compare (empty compares the whole page)
+CONTENT_SELECTOR = os.environ.get("CONTENT_SELECTOR", "").strip()
 
 # Directory to store webpage versions
 SAVE_DIR = Path("webpage_versions")
@@ -85,15 +87,24 @@ def get_page_content(url):
     return response.text
 
 
-def extract_visible_text(html):
+class ContentNotFoundError(Exception):
+    """Raised when CONTENT_SELECTOR matches nothing on a page."""
+
+
+def extract_visible_text(html, selector=""):
     """
     Parses HTML and returns only the visible text content (no scripts/styles).
 
     Args:
         html (str): The HTML content to parse.
+        selector (str): CSS selector of the elements to keep. Empty keeps the
+            whole page.
 
     Returns:
         str | None: Cleaned visible text content, or None if input is empty.
+
+    Raises:
+        ContentNotFoundError: If the selector matches no element.
     """
     if not html:
         return None
@@ -103,8 +114,14 @@ def extract_visible_text(html):
     for element in soup(["script", "style", "noscript"]):
         element.decompose()
 
+    roots = [soup]
+    if selector:
+        roots = soup.select(selector)
+        if not roots:
+            raise ContentNotFoundError(f"CONTENT_SELECTOR {selector!r} matched nothing")
+
     # Get text and clean up whitespace
-    visible_text = soup.get_text(separator="\n")
+    visible_text = "\n".join(root.get_text(separator="\n") for root in roots)
     lines = [line.strip() for line in visible_text.splitlines()]
     clean_text = "\n".join(line for line in lines if line)
 
@@ -235,6 +252,37 @@ def notify_change(url):
     send_email(url, EMAIL_SUBJECT, EMAIL_HTML_TEMPLATE.format(url=url))
 
 
+def get_selector_path(url):
+    """
+    Returns the path of the file that records the CONTENT_SELECTOR used for
+    the saved versions of a URL.
+
+    Args:
+        url (str): The URL to get the path for.
+
+    Returns:
+        Path: The path of the selector file.
+    """
+    return SAVE_DIR / f"{get_url_hash(url)}.selector"
+
+
+def selector_changed(url):
+    """
+    Checks whether the saved versions of a URL used a different selector.
+
+    Versions saved before the selector file existed count as the whole page.
+
+    Args:
+        url (str): The URL to check.
+
+    Returns:
+        bool: True if CONTENT_SELECTOR differs from the saved one.
+    """
+    selector_path = get_selector_path(url)
+    saved = selector_path.read_text(encoding="utf-8") if selector_path.exists() else ""
+    return saved != CONTENT_SELECTOR
+
+
 def get_failure_state_path(url):
     """
     Returns the path of the file that tracks failed fetches of a URL.
@@ -345,13 +393,13 @@ def monitor_site(url):
 
     try:
         page_html = get_page_content(url)
-    except requests.RequestException as e:
+        current_content = extract_visible_text(page_html, CONTENT_SELECTOR)
+    except (requests.RequestException, ContentNotFoundError) as e:
         logger.error(f"Error fetching {url}: {e}")
         record_failure(url, e)
         return
     clear_failure(url)
 
-    current_content = extract_visible_text(page_html)
     if current_content is None:
         return
 
@@ -359,6 +407,15 @@ def monitor_site(url):
     if previous_content is None:
         logger.info(f"First time monitoring {url}. Saving initial content.")
         save_content(url, current_content)
+        get_selector_path(url).write_text(CONTENT_SELECTOR, encoding="utf-8")
+        return
+
+    # Versions taken with another selector are not comparable: start over
+    if selector_changed(url):
+        logger.info(f"CONTENT_SELECTOR changed for {url}. Saving new baseline.")
+        save_content(url, current_content)
+        get_selector_path(url).write_text(CONTENT_SELECTOR, encoding="utf-8")
+        cleanup_old_files(url, 10)
         return
 
     if current_content != previous_content:

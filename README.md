@@ -35,6 +35,15 @@ The script is configured via environment variables. You can create a `.env` file
 | `EMAIL_SUBJECT` | Subject of the notification email. | `Page Updated` |
 | `EMAIL_HTML` | HTML body of the email. Use `{url}` as a placeholder. | See `script.py` |
 | `FAILURE_ALERT_THRESHOLD` | Consecutive failed fetches of a URL before an alert email is sent. `0` disables it. | `15` |
+| `CONTENT_SELECTOR` | CSS selector of the part of the page to compare. Empty compares the whole page. | Empty |
+
+### Comparing only part of a page
+
+By default the whole page is compared, so an edit to its menu, footer or cookie banner sends a change email too. Set `CONTENT_SELECTOR` to a CSS selector such as `#content` to compare only the matching elements. It applies to every URL in `MONITOR_URLS`.
+
+When the selector changes, the next run saves a new baseline instead of emailing. If the selector stops matching anything, for example after a redesign of the page, the run counts as a failed fetch, so you are alerted after `FAILURE_ALERT_THRESHOLD` runs.
+
+The deploy workflow reads it from the `CONTENT_SELECTOR` repository variable (Settings → Secrets and variables → Actions → Variables), not from a secret.
 
 ### Fetch failure alerts
 
