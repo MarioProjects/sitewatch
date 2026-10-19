@@ -74,6 +74,7 @@ jobs:
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_SUBJECT: ${{ secrets.EMAIL_SUBJECT }}
           EMAIL_HTML: ${{ secrets.EMAIL_HTML }}
+          CONTENT_SELECTOR: ${{ vars.CONTENT_SELECTOR }}
         run: |
           encode_secret() {
             local name="$1"
@@ -86,6 +87,7 @@ jobs:
           encode_secret EMAIL_FROM
           encode_secret EMAIL_SUBJECT
           encode_secret EMAIL_HTML
+          encode_secret CONTENT_SELECTOR
 
       - name: Set deployment image
         id: deployment-image
@@ -101,6 +103,7 @@ jobs:
       - name: Deploy on server via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
+          CONTENT_SELECTOR_B64: ${{ steps.runtime-secrets.outputs.CONTENT_SELECTOR_B64 }}
           DEPLOY_PAT: ${{ secrets.DEPLOY_PAT }}
           EMAIL_FROM_B64: ${{ steps.runtime-secrets.outputs.EMAIL_FROM_B64 }}
           EMAIL_HTML_B64: ${{ steps.runtime-secrets.outputs.EMAIL_HTML_B64 }}
@@ -114,7 +117,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: CONTAINER_NAME,DEPLOY_PAT,EMAIL_FROM_B64,EMAIL_HTML_B64,EMAIL_RECIPIENTS_B64,EMAIL_SUBJECT_B64,GITHUB_ACTOR,IMAGE_REF,MONITOR_URLS_B64,REGISTRY,RESEND_API_KEY_B64,SERVER_APP_DIR
+          envs: CONTAINER_NAME,CONTENT_SELECTOR_B64,DEPLOY_PAT,EMAIL_FROM_B64,EMAIL_HTML_B64,EMAIL_RECIPIENTS_B64,EMAIL_SUBJECT_B64,GITHUB_ACTOR,IMAGE_REF,MONITOR_URLS_B64,REGISTRY,RESEND_API_KEY_B64,SERVER_APP_DIR
           script: |
             set -euo pipefail
 
@@ -140,6 +143,7 @@ jobs:
             write_env EMAIL_FROM "$EMAIL_FROM_B64"
             write_env EMAIL_SUBJECT "$EMAIL_SUBJECT_B64"
             write_env EMAIL_HTML "$EMAIL_HTML_B64"
+            write_env CONTENT_SELECTOR "$CONTENT_SELECTOR_B64"
 
             echo "Deploying image: $IMAGE_REF as container: $CONTAINER_NAME"
             docker pull "$IMAGE_REF"
